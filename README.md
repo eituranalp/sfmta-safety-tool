@@ -1,5 +1,3 @@
-(From Claude.md above)
-
 # SFMTA Road Safety Prioritization Tool
 ## Project Context for Claude Code
 
@@ -10,7 +8,7 @@ It is updated as decisions are made — do not treat anything not listed here as
 
 ## What This Project Is
 
-A proof-of-concept AI decision-support tool for the San Francisco Municipal Transportation Agency (SFMTA). It helps a non-technical SFMTA director (Karl) identify which SF road locations should be prioritized for safety improvements, based on crash and complaint data. Built by a 4-person student team for the IBM SkillsBuild AI Experiential Learning Lab. Not production-ready — needs to work for a live demo at Week 10.
+A proof-of-concept AI decision-support tool for the San Francisco Municipal Transportation Agency (SFMTA). It helps a non-technical SFMTA director (Karl) identify which SF road locations should be prioritized for safety improvements, based on crash and complaint data. Built by a 4-person student team for the IBM SkillsBuild AI Experiential Learning Lab.
 
 ---
 
