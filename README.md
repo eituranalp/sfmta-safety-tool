@@ -1,225 +1,161 @@
-# SFMTA Road Safety Prioritization Tool
-## Project Context for Claude Code
+### AI-Powered Road Safety Prioritization for SFMTA
 
-This file is the source of truth for all confirmed project decisions.
-It is updated as decisions are made — do not treat anything not listed here as decided.
+Built by **Team Golden Rate** for the IBM SkillsBuild AI Experiential Learning Lab 2026.
 
----
-
-## What This Project Is
-
-A proof-of-concept AI decision-support tool for the San Francisco Municipal Transportation Agency (SFMTA). It helps a non-technical SFMTA director (Karl) identify which SF road locations should be prioritized for safety improvements, based on crash and complaint data. Built by a 4-person student team for the IBM SkillsBuild AI Experiential Learning Lab.
+This is a proof-of-concept decision-support tool that helps a non-technical SFMTA director identify which San Francisco streets should be prioritized for safety improvements. It ingests public crash and complaint data daily, scores locations by risk, and uses IBM Granite to answer plain-English questions about where to focus resources.
 
 ---
 
-## The 5 Components
+## How It Works
 
-These names are canonical. Never rename them anywhere in the codebase.
+```
+SF Open Data APIs (crashes + 311 complaints)
+        ↓
+Daily ingestion into PostgreSQL
+        ↓
+Risk scoring by street → scored_zones table
+        ↓
+Karl asks a question in IBM watsonx Orchestrate
+        ↓
+Two-stage Granite AI call (classify intent → fetch data → explain)
+        ↓
+Plain-English answer back to Karl
+```
 
-| Component | Type | File |
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Language | Python 3.11 |
+| Backend | FastAPI + Uvicorn |
+| Scheduler | APScheduler (daily ingestion) |
+| Database | PostgreSQL on Render free tier |
+| AI Model | IBM Granite (`ibm/granite-4-h-small`) via watsonx.ai |
+| User Interface | IBM watsonx Orchestrate |
+| Hosting | Render free tier |
+| Keep-alive | UptimeRobot (5-min pings) |
+
+---
+
+## Data Sources
+
+All data is public and fetched via the SF Open Data Socrata REST API.
+
+| Dataset | ID | Notes |
 |---|---|---|
-| `DataIngestionModule` | Deterministic module | `pipeline/ingest.py` |
-| `RiskScoringModule` | Deterministic module | `pipeline/score.py` |
-| `QueryModule` | AI + DB query module | `pipeline/query.py` |
-| `FastAPIServer` | REST API server | `api/main.py` |
-| `OrchestrateAgent` | IBM watsonx Orchestrate agent | Configured in IBM watsonx Orchestrate UI |
+| Traffic Crashes — Injury | `ubvf-ztfx` | Quarterly updates |
+| Traffic Crashes — Fatality | `dau3-4s8f` | Quarterly, 1-month lag |
+| SF 311 Cases | `vw6y-z8j6` | Nightly updates |
+
+Only safety-relevant 311 categories are ingested (blocked streets, pavement defects, streetlights, flooding, damaged traffic signals, etc).
 
 ---
 
-## File Structure
+## Project Structure
 
 ```
 sfmta-safety-tool/
-├── CLAUDE.md
-├── .env                 # Never commit — credentials
-├── .gitignore
+├── .env                    # Never commit — credentials here
 ├── requirements.txt
-├── run_normal.py        # Local runner: triggers ingest_all() manually against Render DB
+├── run_normal.py           # Manual ingestion runner
 │
-├── api/                 # Not yet built
-│   ├── __init__.py
-│   ├── main.py          # FastAPI server — /ingest, /score, /query endpoints
-│   └── openapi.yaml     # OpenAPI spec exported for Orchestrate tool import
+├── api/
+│   ├── main.py             # FastAPI server — /ingest, /score, /query
+│   └── openapi.yaml        # OpenAPI spec imported into Orchestrate
 │
 └── pipeline/
-    ├── __init__.py
-    ├── database.py      # SQLAlchemy models and DB connection — DONE
-    ├── ingest.py        # DataIngestionModule — DONE
-    ├── score.py         # RiskScoringModule — shell only, needs implementation
-    └── query.py         # QueryModule — RAG + Granite call — not yet built
+    ├── database.py         # SQLAlchemy models + DB connection
+    ├── ingest.py           # Fetches and stores raw data from Socrata
+    ├── score.py            # Scores streets by risk → scored_zones
+    └── query.py            # Two-stage Granite RAG call
 ```
 
 ---
 
-## Data Sources (confirmed)
+## Setup
 
-Three SF Open Data datasets fetched via Socrata REST API:
-
-| Dataset | Socrata ID | Update Frequency |
-|---|---|---|
-| Traffic Crashes Resulting in Injury | `ubvf-ztfx` | Quarterly |
-| Traffic Crashes Resulting in Fatality | `dau3-4s8f` | Quarterly, 1-month lag |
-| SF 311 Cases | `vw6y-z8j6` | Nightly |
-
-Caltrans AADT static CSV — optional, state routes only, one-time download.
-
----
-
-## Tech Stack (confirmed)
-
-- Python 3.11
-- fastapi, uvicorn
-- apscheduler
-- requests
-- pandas
-- sqlalchemy, psycopg2-binary
-- python-dotenv
-- PostgreSQL (Render free tier) — SQLite for local development
-
----
-
-## IBM Credentials (confirmed working)
-
+### 1. Clone and install dependencies
+```bash
+git clone <repo-url>
+cd sfmta-safety-tool
+pip install -r requirements.txt
 ```
+
+### 2. Configure environment variables
+Create a `.env` file in the project root:
+```
+DATABASE_URL=postgresql://user:password@host/dbname
 WATSONX_URL=https://us-south.ml.cloud.ibm.com
-WATSONX_PROJECT_ID=<watsonx Challenge Sandbox project ID>
-WATSONX_API_KEY=<IBM Cloud API key>
+WATSONX_PROJECT_ID=your_project_id
+WATSONX_API_KEY=your_api_key
 ```
 
-- IAM token endpoint: `https://iam.cloud.ibm.com/identity/token`
-- Granite API endpoint: `https://us-south.ml.cloud.ibm.com/ml/v1/text/chat?version=2023-05-29`
-- Model: `ibm/granite-4-h-small`
-- Auth: POST to IAM endpoint with API key to get bearer token; include as `Authorization: Bearer <token>` header
+For local development, omit `DATABASE_URL` to use a local SQLite file instead.
+
+### 3. Create database tables
+```bash
+python -m pipeline.database
+```
+
+### 4. Run ingestion
+```bash
+python run_normal.py
+```
+
+### 5. Start the API server
+```bash
+uvicorn api.main:app --reload
+```
 
 ---
 
-## Database Schema (confirmed)
+## API Endpoints
 
-| Table | Key Columns | Purpose |
+| Endpoint | Method | Description |
 |---|---|---|
-| `crashes_injury` | id, unique_id, collision_date, primary_rd, secondary_rd, tb_latitude, tb_longitude, number_injured, number_killed, collision_severity, type_of_collision, supervisor_district, police_district, analysis_neighborhood, ingested_at | Injury crash records from ubvf-ztfx |
-| `crashes_fatality` | id, unique_id, collision_date, latitude, longitude, location, collision_type, supervisor_district, police_district, analysis_neighborhood, ingested_at | Fatality crash records from dau3-4s8f |
-| `cases_311` | id, service_request_id, requested_datetime, service_name, service_subtype, address, latitude, longitude, supervisor_district, police_district, neighborhoods, ingested_at | Safety-relevant 311 cases from vw6y-z8j6 |
-| `ingest_metadata` | dataset_id, dataset_name, last_synced, record_count | Tracks last sync time per dataset for incremental pulls |
-| `scored_zones` | location_name, latitude, longitude, crash_count, fatality_count, complaint_count, recency_score, final_score, last_updated | Ranked priority output from RiskScoringModule |
-| `ai_explanations` | location_name, question_asked, explanation, generated_at | Cached Granite explanations |
-
-**Important — `analysis_neighborhood` is null in both crash tables.**
-The source datasets (ubvf-ztfx, dau3-4s8f) do not include a neighborhood field.
-`score.py` must group locations using `supervisor_district`, `primary_rd` + `secondary_rd` (injury), or `location` (fatality) instead.
+| `/ingest` | POST | Fetch latest data from SF Open Data |
+| `/score` | POST | Re-score all streets and update scored_zones |
+| `/query` | POST | Answer a natural language question using Granite |
+| `/health` | GET | Health check for UptimeRobot keep-alive |
+| `/openapi.json` | GET | OpenAPI spec for Orchestrate tool import |
 
 ---
 
-## Confirmed Technical Rules
+## AI Query Flow
 
-**Granite: call directly via requests library.**
-Do not use CrewAI, LiteLLM, or langchain-ibm. Call the watsonx.ai REST API directly using an IBM IAM bearer token obtained from the token endpoint.
+When Karl asks a question, the `/query` endpoint runs two Granite calls:
 
-**IAM token expires after 60 minutes.**
-Implement token caching — store the token and its expiry time, refresh only when expired. Do not fetch a new token on every Granite call.
+**Stage 1 — Intent Classification**
+Granite classifies Karl's question into a structured JSON object identifying what type of data to fetch (top priority streets, specific street, specific metric, or general question).
 
-**RAG pattern for all AI calls.**
-Never call Granite without data context. Pattern: query `scored_zones` for relevant locations → build prompt with that data → call Granite → return explanation. Granite is never called on a schedule — only on user request.
-
-**Token budget is the top constraint.**
-IBM SkillsBuild watsonx.ai credits are limited. Cache Granite outputs in `ai_explanations` table. Never call Granite for output that already exists and is still fresh.
-
-**Socrata API key is not required.**
-SF Open Data datasets are public. Do not set `SOCRATA_API_KEY` — the key in the original `.env` was invalid and caused 403 errors. Pass `None` as the app token to `sodapy.Socrata()`. Requests without a key are subject to rate limiting but sufficient for this project.
-
-**Secrets via environment variables only.**
-Never hardcode any key, URL, or credential. Always use `os.getenv()`. Never commit `.env` to version control — credentials get deactivated immediately.
-
-**FastAPI generates the OpenAPI spec automatically.**
-Run the FastAPI server and export the spec from `/openapi.json`. Import this YAML into IBM watsonx Orchestrate as a tool definition.
-
-**Render free tier sleeps after 15 minutes of inactivity.**
-Set up UptimeRobot (free) to ping the Render URL every 5 minutes during demo week.
+**Stage 2 — Explanation**
+Granite receives the relevant scored street data and Karl's question, and returns a plain-English explanation Karl can use to justify budget decisions.
 
 ---
 
-## IBM watsonx Orchestrate (confirmed)
+## Current Data (as of April 2026)
 
-Orchestrate is the user-facing interface. Karl interacts with the system through Orchestrate's chat UI.
-
-- Orchestrate connects to the FastAPI backend via an imported OpenAPI spec
-- The spec describes the `/query` endpoint (and optionally `/ingest`, `/score`) as callable tools
-- When Karl submits a query, Orchestrate determines which tool to call and passes the parameters
-- FastAPI handles the DB query + Granite call and returns a JSON response
-- Orchestrate presents the response conversationally to Karl
-
-**To configure:** Import `api/openapi.yaml` into Orchestrate via Build → Tools → Import from file.
+| Table | Records | Date Range |
+|---|---|---|
+| `crashes_injury` | 2,365 | Apr 2025 – Apr 2026 |
+| `crashes_fatality` | 18 | Apr 2025 – Apr 2026 |
+| `cases_311` | 46,986 | Apr 2025 – Apr 2026 |
 
 ---
 
-## 311 Safety Filters (confirmed)
+## Important Notes
 
-The following `(service_name, service_subtype)` pairs are the only ones ingested from vw6y-z8j6.
-These were verified against the live dataset — all other subtypes in the original filter list did not exist.
-
-| service_name | service_subtype |
-|---|---|
-| Blocked Street and Sidewalk | blocked_sidewalk |
-| Blocked Street and Sidewalk | blocked_parking_space_or_strip |
-| Street Defect | pavement_defect |
-| Street Defect | sidewalk_defect |
-| Street Defect | manhole_cover_off |
-| Street Defect | curb_or_curb_ramp_defect |
-| Sidewalk and Curb | pavement_defect |
-| Sidewalk and Curb | sidewalk_defect |
-| Sidewalk and Curb | curb_or_curb_ramp_defect |
-| Streetlights | light |
-| Sewer | flooding |
-| Tree Maintenance | damaged_tree |
-| Damage Property | traffic_signal |
-| Damage Property | transit_shelter_platform_hazardous |
+- **No API key required** for SF Open Data — datasets are public
+- **Do not commit `.env`** — IBM Cloud credentials are deactivated immediately if exposed in a public repo
+- **Render free tier sleeps** after 15 minutes of inactivity — UptimeRobot keeps it alive during demos
+- **IAM tokens expire** after 60 minutes — token caching is implemented in `query.py`
 
 ---
 
-## Out of Scope
+## Built With IBM
 
-- Real-time or streaming data (511.org excluded)
-- User authentication or accounts
-- H3 hexagonal spatial clustering — geographic grouping uses location name/neighborhood from source data
-- Streamlit — replaced by IBM watsonx Orchestrate as the user-facing interface
-- CrewAI, LiteLLM, langchain-ibm — all excluded
-- Mobile UI
-- Dollar-amount budget optimization
-- Production error handling or SLAs
-- Multi-city support
-- SFMTA internal system integration
-
----
-
-## Build Order
-
-1. `pipeline/database.py` — SQLAlchemy models, DB connection, table creation
-2. `pipeline/ingest.py` — DataIngestionModule, Socrata fetch + normalize + write to DB
-3. `pipeline/score.py` — RiskScoringModule, weighted scoring formula + write scored_zones
-4. `pipeline/query.py` — QueryModule, DB query + RAG prompt + Granite call
-5. `api/main.py` — FastAPIServer, expose all modules as endpoints + APScheduler
-6. `api/openapi.yaml` — Export from FastAPI and import into Orchestrate
-
----
-
-## Decisions Log
-
-*Append confirmed decisions here as the project progresses. Do not add anything that hasn't been explicitly decided.*
-
-- **2025-04** — Data sources confirmed: ubvf-ztfx, dau3-4s8f, vw6y-z8j6, optional Caltrans AADT
-- **2025-04** — 511.org excluded from MVP
-- **2025-04** — Hosting: Render free tier (web service + PostgreSQL)
-- **2026-04** — Architecture revised: CrewAI/LiteLLM/Streamlit/H3 removed
-- **2026-04** — FastAPI + IBM watsonx Orchestrate adopted as backend + UI layer
-- **2026-04** — Granite called directly via REST API (no framework wrappers)
-- **2026-04** — Confirmed working credentials: us-south.ml.cloud.ibm.com, granite-4-h-small, watsonx Challenge Sandbox project
-- **2026-04** — RAG pattern confirmed: DB query → prompt → Granite → explanation
-- **2026-04** — SpatialClusteringModule removed; geographic grouping by location name from source data
-- **2026-04** — Component count reduced from 6 to 5; OrchestratorAgent and ExplainabilityAgent replaced by OrchestrateAgent (IBM platform) and QueryModule (Python)
-- **2026-04** — Real table names confirmed: crashes_injury, crashes_fatality, cases_311, ingest_metadata, scored_zones, ai_explanations
-- **2026-04** — scored_zones primary key: location_name (String); all columns confirmed: location_name, latitude, longitude, crash_count, fatality_count, complaint_count, recency_score, final_score, last_updated
-- **2026-04** — Local dev: SQLite via sfmta_safety.db (fallback when DATABASE_URL not set); production: PostgreSQL via DATABASE_URL on Render
-- **2026-04** — Socrata API key not required; SF Open Data is public; pass None to sodapy.Socrata()
-- **2026-04** — 311 safety filters confirmed: 14 (service_name, service_subtype) pairs; original subtype list was invalid
-- **2026-04** — analysis_neighborhood is null in all crash records; source datasets don't include neighborhood field; score.py must group by supervisor_district or road name
-- **2026-04** — Initial data ingested to Render: 18 fatality crashes, 2365 injury crashes, 46986 311 cases (Apr 2025 – Apr 2026)
+- IBM watsonx.ai — Granite foundation model
+- IBM watsonx Orchestrate — Conversational interface for Karl
+- IBM SkillsBuild AI Experiential Learning Lab 2026
