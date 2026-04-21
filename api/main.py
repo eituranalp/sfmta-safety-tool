@@ -69,8 +69,9 @@ def query(
     lat_max: float = None,
     lng_min: float = None,
     lng_max: float = None,
+    days_recent: int = None,
 ):
-    no_sql_params = not any([street_name, metric, lat_min, lat_max, lng_min, lng_max])
+    no_sql_params = not any([street_name, metric, lat_min, lat_max, lng_min, lng_max, days_recent])
     if no_sql_params:
         return {"count": 0, "data": [], "message": "No query parameters provided."}
 
@@ -91,6 +92,9 @@ def query(
                 ScoredZone.latitude.between(lat_min, lat_max),
                 ScoredZone.longitude.between(lng_min, lng_max),
             )
+
+        if days_recent is not None:
+            q = q.filter(ScoredZone.recency_score >= days_recent / 365.0)
 
         sort_col = getattr(ScoredZone, metric or "final_score")
         q = q.order_by(sort_col.desc()).limit(limit)
