@@ -29,7 +29,11 @@ def daily_pipeline():
     # score() call goes here once score.py is implemented
 
 
-app = FastAPI(title="SFMTA Safety Tool API")
+app = FastAPI(
+    title="SFMTA Safety Tool API",
+    version="0.1.0",
+    servers=[{"url": "https://sfmta-safety-tool.onrender.com"}]
+)
 
 app.add_middleware(
     CORSMiddleware,
