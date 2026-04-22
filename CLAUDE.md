@@ -23,7 +23,7 @@ These names are canonical. Never rename them anywhere in the codebase.
 | `FastAPIServer` | REST API server | `api/main.py` |
 | `OrchestrateAgent` | IBM watsonx Orchestrate agent | Configured in IBM watsonx Orchestrate UI |
 
-**Note: `QueryModule` and `query.py` have been removed.** The original query.py was going to handle Granite calls + data fetching in Python. This has been replaced entirely by Orchestrate (AI reasoning + explanation) + FastAPI (data fetching). There are no Granite/LLM calls anywhere in the Python codebase.
+**Note: `QueryModule` and `query.py` have been removed.** Replaced entirely by Orchestrate (AI reasoning + explanation) + FastAPI (data fetching). There are no Granite/LLM calls anywhere in the Python codebase.
 
 ---
 
@@ -41,13 +41,13 @@ sfmta-safety-tool/
 │   ├── __init__.py
 │   └── main.py          # FastAPIServer — /query, /ingest, /score, /health endpoints
 │                        # No AI/Granite calls — pure SQL query endpoints only
-│                        # APScheduler runs daily ingest + score at 6am Pacific
+│                        # APScheduler runs daily ingest then score at 6am Pacific
 │
 └── pipeline/
     ├── __init__.py
     ├── database.py      # SQLAlchemy models and DB connection — DONE
     ├── ingest.py        # DataIngestionModule — DONE
-    └── score.py         # RiskScoringModule — in progress (teammate)
+    └── score.py         # RiskScoringModule — IN PROGRESS (teammate)
 ```
 
 ---
@@ -91,6 +91,7 @@ All parameters are optional. FastAPI builds SQL dynamically from whatever Orches
 | `street_name` | string | Partial street name filter — uses ILIKE match |
 | `metric` | string | Column to sort by: final_score, crash_count, fatality_count, complaint_count, recency_score |
 | `limit` | int | Number of results (default 10, max 50) |
+| `days_recent` | int | Filter to streets with activity in last N days — maps to recency_score >= (days_recent / 365.0) |
 | `lat_min` | float | Bounding box minimum latitude |
 | `lat_max` | float | Bounding box maximum latitude |
 | `lng_min` | float | Bounding box minimum longitude |
@@ -222,6 +223,14 @@ Karl interacts with the system through Orchestrate's chat UI.
 **Agent instructions (confirmed):**
 You are Karl the Fog, a road safety analyst assistant for the San Francisco Municipal Transportation Agency (SFMTA). You help Karl, the SFMTA director, understand which streets in San Francisco need safety improvements based on crash and complaint data. Your job is to answer Karl's questions clearly and in plain English. Karl is not technical — avoid jargon, be direct, and always explain why a location is a priority using the data available. When Karl asks about road safety priorities, locations, or data, use the query tool to fetch and explain the relevant information. Always base your answers on the data returned by the tool — never invent or assume facts. If the tool returns no data, tell Karl clearly that no data is available yet. Keep responses concise — 2 to 4 sentences per location.
 
+## OpenAPI Spec — When to Re-import into Orchestrate
+
+Re-import required when: new endpoint added, endpoint deleted, /query parameters added/renamed/removed, response schema changed.
+
+Not required when: bug fixes, SQL changes, score formula changes, ingestion logic changes.
+
+To re-import: download openapi.json from https://sfmta-safety-tool.onrender.com/openapi.json, go to Orchestrate agent Toolset, delete existing Query tool, re-import file, select Query only, redeploy agent.
+
 ---
 
 ## 311 Safety Filters (confirmed)
@@ -270,12 +279,13 @@ These were verified against the live dataset — all other subtypes in the origi
 
 1. `pipeline/database.py` — SQLAlchemy models, DB connection, table creation — DONE
 2. `pipeline/ingest.py` — DataIngestionModule, Socrata fetch + normalize + write to DB — DONE
-3. `pipeline/score.py` — RiskScoringModule, street-level scoring + write scored_zones — IN PROGRESS
-4. `api/main.py` — FastAPIServer, SQL query endpoints + APScheduler — NEXT
-5. Deploy FastAPI to Render as web service — after main.py is built
-6. Set up UptimeRobot keep-alive on Render URL
-7. Export OpenAPI spec and import into Orchestrate as tool
-8. End to end test once scored_zones has real data
+3. `pipeline/score.py` — RiskScoringModule, street-level scoring + write scored_zones — IN PROGRESS (teammate)
+4. `api/main.py` — FastAPIServer, SQL query endpoints + APScheduler — DONE
+5. Deploy to Render + UptimeRobot — DONE
+6. Orchestrate agent configuration — DONE
+7. End to end test with real scored data — PENDING score.py
+8. Demo preparation — Week 9-10
+9. Pitch deck and documentation — Week 9-10
 
 ---
 
@@ -323,3 +333,15 @@ Database: Render PostgreSQL at oregon-postgres.render.com/karls_db
 - **2026-04** — UptimeRobot pings /health every 5 minutes to keep Render awake; APScheduler fires daily at 6am Pacific inside FastAPI process
 - **2026-04** — ai_explanations table currently unused; was for Granite caching, may be repurposed or removed
 - **2026-04** — Orchestrate agent model must be changed to Granite before final submission for IBM evaluation
+- **2026-04** — query.py removed from project entirely; replaced by Orchestrate + FastAPI
+- **2026-04** — No Granite calls in Python; Orchestrate built-in model handles all AI reasoning
+- **2026-04** — Orchestrate agent configured: SFMTA_Safety_Tool; Query tool imported from real OpenAPI spec
+- **2026-04** — /query endpoint parameters confirmed: street_name, metric, limit, days_recent, lat_min, lat_max, lng_min, lng_max
+- **2026-04** — days_recent filter uses recency_score >= (days_recent / 365.0)
+- **2026-04** — APScheduler daily_pipeline wired: ingest runs first, score runs after, early return if ingest fails
+- **2026-04** — /score endpoint auto-activates when score.py adds score() method, no main.py changes needed
+- **2026-04** — Orchestrate Behavior instructions updated: explains WHY not just WHAT, compares streets with tradeoffs, mentions High Injury Network
+- **2026-04** — on_vz_hin_2022 not in current schema or ingestion; deferred post-MVP
+- **2026-04** — FastAPI servers field added to OpenAPI spec for Orchestrate import compatibility
+- **2026-04** — UptimeRobot confirmed working; HEAD method accepted by /health endpoint
+- **2026-04** — Render auto-deploy on GitHub push confirmed working

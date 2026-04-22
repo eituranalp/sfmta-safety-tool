@@ -1,8 +1,12 @@
+import os
 import streamlit as st
 import pandas as pd
-import sqlite3
 import folium
 from streamlit_folium import st_folium
+from sqlalchemy import create_engine
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # -------------------------------------------------
 # Page setup
@@ -30,7 +34,6 @@ st.markdown("""
     /* Remove top white header area */
     header[data-testid="stHeader"] {
         background: #050816 !important;
-        height: 0rem !important;
     }
 
     div[data-testid="stToolbar"] {
@@ -173,126 +176,42 @@ st.markdown("""
     iframe {
         border-radius: 12px !important;
     }
+
+    /* Hide only the collapse button inside the sidebar — keep expand button visible */
+    button[data-testid="stSidebarCollapseButton"] {
+        display: none !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🚦 San Francisco Traffic Prioritization Dashboard")
+st.title("San Francisco Traffic Prioritization Dashboard")
 st.write("Weighted scoring dashboard using your SF safety database.")
 
 # -------------------------------------------------
-# Database path
+# Database connection
 # -------------------------------------------------
-DB_PATH = "/Users/yokolu/Desktop/sfmta_safety.db"
+_db_url = os.getenv("DATABASE_URL", "sqlite:///./sfmta_safety.db")
+_engine = create_engine(_db_url, echo=False)
 
 # -------------------------------------------------
-# Approximate district coordinates and names
-# -------------------------------------------------
-district_coords = {
-    "1": (37.7800, -122.4820),
-    "2": (37.7970, -122.4380),
-    "3": (37.7940, -122.4100),
-    "4": (37.7520, -122.4940),
-    "5": (37.7730, -122.4460),
-    "6": (37.7780, -122.4140),
-    "7": (37.7340, -122.4660),
-    "8": (37.7520, -122.4340),
-    "9": (37.7430, -122.4160),
-    "10": (37.7300, -122.3920),
-    "11": (37.7170, -122.4470)
-}
-
-district_names = {
-    "1": "Richmond District",
-    "2": "Marina",
-    "3": "Chinatown",
-    "4": "Sunset District",
-    "5": "Haight-Ashbury",
-    "6": "SoMa",
-    "7": "West Portal",
-    "8": "Castro",
-    "9": "Mission District",
-    "10": "Bayview",
-    "11": "Excelsior"
-}
-
-# -------------------------------------------------
-# Load data from SQLite
+# Load data from scored_zones
 # -------------------------------------------------
 @st.cache_data
 def load_data():
-    conn = sqlite3.connect(DB_PATH)
-
-    complaints_df = pd.read_sql_query("""
-        SELECT
-            CAST(supervisor_district AS TEXT) AS location,
-            COUNT(*) AS complaint_count
-        FROM cases_311
-        WHERE supervisor_district IS NOT NULL
-        GROUP BY CAST(supervisor_district AS TEXT)
-    """, conn)
-
-    crashes_df = pd.read_sql_query("""
-        SELECT
-            CAST(supervisor_district AS TEXT) AS location,
-            COUNT(*) AS crash_count
-        FROM crashes_injury
-        WHERE supervisor_district IS NOT NULL
-        GROUP BY CAST(supervisor_district AS TEXT)
-    """, conn)
-
-    fatalities_df = pd.read_sql_query("""
-        SELECT
-            CAST(supervisor_district AS TEXT) AS location,
-            COUNT(*) AS fatality_count
-        FROM crashes_fatality
-        WHERE supervisor_district IS NOT NULL
-        GROUP BY CAST(supervisor_district AS TEXT)
-    """, conn)
-
-    conn.close()
-
-    def normalize_location(value):
-        try:
-            number = float(value)
-            if number.is_integer():
-                return str(int(number))
-        except Exception:
-            pass
-        return str(value)
-
-    complaints_df["location"] = complaints_df["location"].apply(normalize_location)
-    crashes_df["location"] = crashes_df["location"].apply(normalize_location)
-    fatalities_df["location"] = fatalities_df["location"].apply(normalize_location)
-
-    merged_df = complaints_df.merge(crashes_df, on="location", how="outer")
-    merged_df = merged_df.merge(fatalities_df, on="location", how="outer")
-    merged_df = merged_df.fillna(0)
-
-    merged_df["complaint_count"] = merged_df["complaint_count"].astype(int)
-    merged_df["crash_count"] = merged_df["crash_count"].astype(int)
-    merged_df["fatality_count"] = merged_df["fatality_count"].astype(int)
-
-    merged_df["location_name"] = merged_df["location"].map(
-        lambda x: district_names.get(x, f"Supervisor District {x}")
-    )
-    merged_df["lat"] = merged_df["location"].map(
-        lambda x: district_coords.get(x, (37.7600, -122.4400))[0]
-    )
-    merged_df["lng"] = merged_df["location"].map(
-        lambda x: district_coords.get(x, (37.7600, -122.4400))[1]
-    )
-
-    return merged_df
+    df = pd.read_sql("SELECT location_name, latitude AS lat, longitude AS lng, crash_count, fatality_count, complaint_count FROM scored_zones", _engine)
+    df["crash_count"] = df["crash_count"].astype(int)
+    df["fatality_count"] = df["fatality_count"].astype(int)
+    df["complaint_count"] = df["complaint_count"].astype(int)
+    return df
 
 # -------------------------------------------------
 # Helpers
 # -------------------------------------------------
-def min_max_normalize(series):
-    min_val = series.min()
+def max_normalize(series):
     max_val = series.max()
-    if max_val == min_val:
-        return pd.Series([1.0] * len(series), index=series.index)
-    return (series - min_val) / (max_val - min_val)
+    if max_val == 0:
+        return pd.Series([0.0] * len(series), index=series.index)
+    return series / max_val
 
 def classify_priority(score):
     if score >= 0.75:
@@ -303,10 +222,10 @@ def classify_priority(score):
 
 def get_priority_color(priority_level):
     if priority_level == "HIGH":
-        return "red"
+        return "#ff4040"
     elif priority_level == "MEDIUM":
-        return "orange"
-    return "blue"
+        return "#f5a623"
+    return "#4a90d9"
 
 # -------------------------------------------------
 # Load data
@@ -314,7 +233,7 @@ def get_priority_color(priority_level):
 try:
     data = load_data()
 except Exception as e:
-    st.error(f"Could not read database file at: {DB_PATH}")
+    st.error(f"Could not load data from scored_zones: {e}")
     st.exception(e)
     st.stop()
 
@@ -337,6 +256,9 @@ crash_weight_norm = crash_weight / weight_total
 fatality_weight_norm = fatality_weight / weight_total
 complaint_weight_norm = complaint_weight / weight_total
 
+st.sidebar.subheader("Map Display")
+map_limit = st.sidebar.slider("Markers on map (top N by score)", 10, 200, 100, 10)
+
 st.sidebar.subheader("Normalized Weights")
 st.sidebar.write(f"Crash: {crash_weight_norm:.2f}")
 st.sidebar.write(f"Fatality: {fatality_weight_norm:.2f}")
@@ -345,9 +267,9 @@ st.sidebar.write(f"Complaint: {complaint_weight_norm:.2f}")
 # -------------------------------------------------
 # Score computation
 # -------------------------------------------------
-data["crash_norm"] = min_max_normalize(data["crash_count"])
-data["fatality_norm"] = min_max_normalize(data["fatality_count"])
-data["complaint_norm"] = min_max_normalize(data["complaint_count"])
+data["crash_norm"] = max_normalize(data["crash_count"])
+data["fatality_norm"] = max_normalize(data["fatality_count"])
+data["complaint_norm"] = max_normalize(data["complaint_count"])
 
 data["recency_score"] = (
     data["crash_norm"] * crash_weight_norm +
@@ -406,23 +328,34 @@ with left_col:
     sf_map = folium.Map(
         location=[37.76, -122.44],
         zoom_start=12,
+        tiles="CartoDB dark_matter",
         control_scale=True
     )
 
-    for _, row in output_df.iterrows():
-        popup_text = (
-            f"Location: {row['location_name']}<br>"
-            f"Crash Count: {row['crash_count']}<br>"
-            f"Fatality Count: {row['fatality_count']}<br>"
-            f"Complaint Count: {row['complaint_count']}<br>"
-            f"Recency Score: {row['recency_score']:.2f}<br>"
-            f"Priority: {row['priority_level']}"
-        )
+    map_df = output_df.head(map_limit)
 
-        folium.Marker(
+    for _, row in map_df.iterrows():
+        color = get_priority_color(row["priority_level"])
+        popup_text = (
+            f"<b>{row['location_name']}</b><br>"
+            f"Priority: <b>{row['priority_level']}</b><br>"
+            f"Score: {row['recency_score']:.2f}<br>"
+            f"Crashes: {row['crash_count']}<br>"
+            f"Fatalities: {row['fatality_count']}<br>"
+            f"Complaints: {row['complaint_count']}"
+        )
+        radius = 5 + row["recency_score"] * 10
+
+        folium.CircleMarker(
             location=[row["lat"], row["lng"]],
-            popup=folium.Popup(popup_text, max_width=300),
-            icon=folium.Icon(color=get_priority_color(row["priority_level"]))
+            radius=radius,
+            color=color,
+            fill=True,
+            fill_color=color,
+            fill_opacity=0.75,
+            weight=1.5,
+            popup=folium.Popup(popup_text, max_width=220),
+            tooltip=row["location_name"],
         ).add_to(sf_map)
 
     st.markdown('<div class="map-wrapper">', unsafe_allow_html=True)

@@ -8,6 +8,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from pipeline.database import ScoredZone, get_session
 from pipeline.ingest import DataIngestionModule
 
+try:
+    from pipeline.score import RiskScoringModule as _RSM
+
+    def _run_score():
+        scorer = _RSM()
+        scorer.score()
+
+except (ImportError, AttributeError):
+    def _run_score():
+        raise NotImplementedError("score() not yet implemented in pipeline/score.py")
+
 logger = logging.getLogger(__name__)
 
 VALID_METRICS = {
@@ -26,7 +37,12 @@ def daily_pipeline():
         logger.info("Daily ingest complete.")
     except Exception as e:
         logger.error(f"Daily ingest failed: {e}")
-    # score() call goes here once score.py is implemented
+        return
+    try:
+        _run_score()
+        logger.info("Daily score complete.")
+    except Exception as e:
+        logger.error(f"Daily score failed: {e}")
 
 
 app = FastAPI(
@@ -136,4 +152,10 @@ def ingest():
 
 @app.post("/score")
 def score():
-    return {"status": "not_implemented", "message": "score.py not yet built."}
+    try:
+        _run_score()
+        return {"status": "success", "message": "Scoring complete."}
+    except NotImplementedError:
+        return {"status": "not_implemented", "message": "score.py not yet built."}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
