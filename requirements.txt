@@ -4,7 +4,7 @@ sodapy==2.2.0
 python-dotenv==1.0.1
 
 # Data processing
-pandas==2.2.3
+pandas==2.1.4
 
 # Database
 sqlalchemy==2.0.36
