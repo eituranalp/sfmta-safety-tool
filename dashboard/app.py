@@ -181,11 +181,36 @@ st.markdown("""
     button[data-testid="stSidebarCollapseButton"] {
         display: none !important;
     }
+
+    /* Generate Briefing button — always active-looking */
+    div[data-testid="stButton"] > button {
+        background: linear-gradient(135deg, #0f2550, #1a3f8f) !important;
+        border: 1px solid #3a6ad4 !important;
+        color: white !important;
+        font-weight: 600 !important;
+        width: 100% !important;
+        transition: box-shadow 0.2s, border-color 0.2s !important;
+    }
+    div[data-testid="stButton"] > button:hover {
+        border-color: #6a9ae9 !important;
+        box-shadow: 0 0 12px rgba(74, 122, 217, 0.5) !important;
+    }
+
+    .stale-warning {
+        background: rgba(184, 120, 20, 0.18);
+        border: 1px solid rgba(255, 190, 80, 0.4);
+        color: #ffe9bf !important;
+        border-radius: 8px;
+        padding: 8px 12px;
+        font-size: 13px;
+        font-weight: 500;
+        margin-bottom: 8px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-st.title("San Francisco Traffic Prioritization Dashboard")
-st.write("Weighted scoring dashboard using your SF safety database.")
+st.title("SF Road Safety Prioritization")
+st.caption("Crash and complaint data · San Francisco · Updated daily")
 
 # -------------------------------------------------
 # Database connection
@@ -259,10 +284,22 @@ complaint_weight_norm = complaint_weight / weight_total
 st.sidebar.subheader("Map Display")
 map_limit = st.sidebar.slider("Markers on map (top N by score)", 10, 200, 100, 10)
 
-st.sidebar.subheader("Normalized Weights")
-st.sidebar.write(f"Crash: {crash_weight_norm:.2f}")
-st.sidebar.write(f"Fatality: {fatality_weight_norm:.2f}")
-st.sidebar.write(f"Complaint: {complaint_weight_norm:.2f}")
+st.sidebar.subheader("Weight Breakdown")
+st.sidebar.markdown(
+    f"""
+    <div style="border-radius:6px; overflow:hidden; height:10px; display:flex; margin-bottom:6px;">
+        <div style="width:{crash_weight_norm:.0%}; background:#fbbf24;" title="Crashes"></div>
+        <div style="width:{fatality_weight_norm:.0%}; background:#2dd4bf;" title="Fatalities"></div>
+        <div style="width:{complaint_weight_norm:.0%}; background:#e879f9;" title="Complaints"></div>
+    </div>
+    <div style="display:flex; justify-content:space-between; font-size:12px; color:#9fb0d9;">
+        <span style="color:#fbbf24;">&#9632;</span> Crashes {crash_weight_norm:.0%}&nbsp;&nbsp;
+        <span style="color:#2dd4bf;">&#9632;</span> Fatalities {fatality_weight_norm:.0%}&nbsp;&nbsp;
+        <span style="color:#e879f9;">&#9632;</span> Complaints {complaint_weight_norm:.0%}
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 # -------------------------------------------------
 # Score computation
@@ -314,16 +351,14 @@ top_row = output_df.iloc[0]
 # -------------------------------------------------
 # Layout
 # -------------------------------------------------
-left_col, right_col = st.columns([2.2, 1.05])
+left_col, right_col = st.columns([1.7, 1.3])
 
 # -------------------------------------------------
 # Left side
 # -------------------------------------------------
 with left_col:
-    st.subheader("Prioritized Output")
     st.dataframe(display_df, use_container_width=True, hide_index=True)
 
-    st.subheader("Map View")
 
     sf_map = folium.Map(
         location=[37.76, -122.44],
@@ -362,7 +397,7 @@ with left_col:
     st_folium(
         sf_map,
         use_container_width=True,
-        height=470,
+        height=540,
         returned_objects=[]
     )
     st.markdown('</div>', unsafe_allow_html=True)
@@ -373,83 +408,128 @@ with left_col:
 with right_col:
     st.subheader("Decision Support Panel")
 
+    st.markdown("### AI Briefing")
+
+    current_weights = (crash_weight_norm, fatality_weight_norm, complaint_weight_norm)
+    briefing_weights = st.session_state.get("briefing_weights")
+    is_stale = briefing_weights is not None and briefing_weights != current_weights
+
+    if is_stale:
+        st.markdown(
+            '<div class="stale-warning">↻ Weights changed — regenerate for latest</div>',
+            unsafe_allow_html=True,
+        )
+
+    if st.button("Generate Briefing"):
+        top10 = output_df.head(10)
+        lines = []
+        for _, row in top10.iterrows():
+            lines.append(
+                f"- {row['location_name']}: {int(row['crash_count'])} crashes, "
+                f"{int(row['fatality_count'])} fatalities, {int(row['complaint_count'])} complaints, "
+                f"weighted score {row['recency_score']:.2f}"
+            )
+        data_block = "\n".join(lines)
+        prompt = (
+            "You are a road safety analyst for the San Francisco Municipal Transportation Agency (SFMTA). "
+            "Based on cumulative road safety data from the past year, write a 3-sentence briefing "
+            "for a non-technical director identifying the highest priority streets and what is driving their scores. "
+            f"The analyst has applied custom weights: crashes {crash_weight_norm:.0%}, "
+            f"fatalities {fatality_weight_norm:.0%}, complaints {complaint_weight_norm:.0%}. "
+            "Be specific about which streets have fatalities vs high complaint volume. "
+            "Do not use jargon.\n\n"
+            f"Top 10 streets by weighted risk score:\n{data_block}"
+        )
+        try:
+            from ibm_watsonx_ai import Credentials
+            from ibm_watsonx_ai.foundation_models import ModelInference
+
+            with st.spinner("Generating briefing..."):
+                credentials = Credentials(
+                    url=os.getenv("WATSONX_URL"),
+                    api_key=os.getenv("WATSONX_API_KEY"),
+                )
+                model = ModelInference(
+                    model_id="ibm/granite-4-h-small",
+                    credentials=credentials,
+                    project_id=os.getenv("WATSONX_PROJECT_ID"),
+                    params={"max_new_tokens": 300, "temperature": 0.3},
+                )
+                st.session_state["dashboard_briefing"] = model.generate_text(prompt=prompt)
+                st.session_state["briefing_weights"] = (crash_weight_norm, fatality_weight_norm, complaint_weight_norm)
+        except Exception as e:
+            st.error(f"Granite call failed: {e}")
+
+    if "dashboard_briefing" in st.session_state:
+        c, f, co = st.session_state["briefing_weights"]
+        st.markdown(
+            f"""
+            <div class="row-card" style="margin-top: 10px;">
+                <div class="row-label">Granite — crashes {c:.0%} / fatalities {f:.0%} / complaints {co:.0%}</div>
+                <p style="color: white; font-size: 14px; line-height: 1.7; margin-top: 8px;">{st.session_state["dashboard_briefing"]}</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    st.divider()
+    st.markdown("### Top Priority Street")
+
     st.markdown(
         f"""
         <div class="metric-card">
-            <div class="metric-title">Top Priority Location</div>
+            <div class="metric-title">Highest Risk Location</div>
             <div class="metric-value">{top_row['location_name']}</div>
         </div>
         """,
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
-
-    st.markdown("### Output Row")
 
     st.markdown(
         f"""
         <div class="row-card">
             <div class="row-grid">
                 <div class="row-item">
-                    <div class="row-label">location_name</div>
+                    <div class="row-label">Street</div>
                     <div class="row-value">{top_row['location_name']}</div>
                 </div>
                 <div class="row-item">
-                    <div class="row-label">recency_score</div>
-                    <div class="row-value">{float(top_row['recency_score']):.2f}</div>
+                    <div class="row-label">Priority</div>
+                    <div class="row-value">{top_row['priority_level']}</div>
                 </div>
                 <div class="row-item">
-                    <div class="row-label">lat</div>
-                    <div class="row-value">{float(top_row['lat']):.4f}</div>
-                </div>
-                <div class="row-item">
-                    <div class="row-label">lng</div>
-                    <div class="row-value">{float(top_row['lng']):.4f}</div>
-                </div>
-                <div class="row-item">
-                    <div class="row-label">crash_count</div>
+                    <div class="row-label">Crashes</div>
                     <div class="row-value">{int(top_row['crash_count'])}</div>
                 </div>
                 <div class="row-item">
-                    <div class="row-label">fatality_count</div>
+                    <div class="row-label">Fatalities</div>
                     <div class="row-value">{int(top_row['fatality_count'])}</div>
                 </div>
                 <div class="row-item">
-                    <div class="row-label">complaint_count</div>
+                    <div class="row-label">Complaints</div>
                     <div class="row-value">{int(top_row['complaint_count'])}</div>
                 </div>
                 <div class="row-item">
-                    <div class="row-label">priority_level</div>
-                    <div class="row-value">{top_row['priority_level']}</div>
+                    <div class="row-label">Recent Activity</div>
+                    <div class="row-value">{float(top_row['recency_score']):.2f}</div>
+                </div>
+                <div class="row-item">
+                    <div class="row-label">Latitude</div>
+                    <div class="row-value">{float(top_row['lat']):.4f}</div>
+                </div>
+                <div class="row-item">
+                    <div class="row-label">Longitude</div>
+                    <div class="row-value">{float(top_row['lng']):.4f}</div>
                 </div>
             </div>
         </div>
         """,
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
-
-    if top_row["priority_level"] == "HIGH":
-        st.markdown(
-            '<div class="alert-high">Immediate intervention recommended.</div>',
-            unsafe_allow_html=True
-        )
-    elif top_row["priority_level"] == "MEDIUM":
-        st.markdown(
-            '<div class="alert-medium">Monitor conditions closely.</div>',
-            unsafe_allow_html=True
-        )
-    else:
-        st.markdown(
-            '<div class="alert-low">Normal conditions.</div>',
-            unsafe_allow_html=True
-        )
-
-    st.markdown("### Weight Summary")
-    st.write(f"Crash Weight: {crash_weight_norm:.2f}")
-    st.write(f"Fatality Weight: {fatality_weight_norm:.2f}")
-    st.write(f"Complaint Weight: {complaint_weight_norm:.2f}")
 
 # -------------------------------------------------
 # Raw data
 # -------------------------------------------------
 with st.expander("Show raw output data"):
     st.dataframe(output_df, use_container_width=True, hide_index=True)
+

@@ -23,7 +23,9 @@ These names are canonical. Never rename them anywhere in the codebase.
 | `FastAPIServer` | REST API server | `api/main.py` |
 | `OrchestrateAgent` | IBM watsonx Orchestrate agent | Configured in IBM watsonx Orchestrate UI |
 
-**Note: `QueryModule` and `query.py` have been removed.** Replaced entirely by Orchestrate (AI reasoning + explanation) + FastAPI (data fetching). There are no Granite/LLM calls anywhere in the Python codebase.
+**Note: `QueryModule` and `query.py` have been removed.** Replaced entirely by Orchestrate (AI reasoning + explanation) + FastAPI (data fetching).
+
+**Granite calls now exist in the Python codebase** — `pipeline/briefing.py` calls `ibm/granite-4-h-small` once daily after scoring, and `dashboard/app.py` calls it on-demand when the user clicks Generate Briefing. These are separate from Orchestrate's built-in model.
 
 ---
 
@@ -36,18 +38,24 @@ sfmta-safety-tool/
 ├── .gitignore
 ├── requirements.txt
 ├── run_normal.py        # Local runner: triggers ingest_all() manually against Render DB
+├── run_dashboard.bat    # Local launcher for Streamlit dashboard
 │
 ├── api/
 │   ├── __init__.py
-│   └── main.py          # FastAPIServer — /query, /ingest, /score, /health endpoints
-│                        # No AI/Granite calls — pure SQL query endpoints only
-│                        # APScheduler runs daily ingest then score at 6am Pacific
+│   └── main.py          # FastAPIServer — /query, /ingest, /score, /health, /briefing endpoints
+│                        # APScheduler runs daily ingest → score → briefing at 6am Pacific
+│
+├── dashboard/
+│   └── app.py           # Streamlit dashboard — reads scored_zones, on-demand Granite briefing
+│                        # Run locally: streamlit run dashboard/app.py
 │
 └── pipeline/
     ├── __init__.py
     ├── database.py      # SQLAlchemy models and DB connection — DONE
     ├── ingest.py        # DataIngestionModule — DONE
-    └── score.py         # RiskScoringModule — IN PROGRESS (teammate)
+    ├── score.py         # RiskScoringModule — DONE
+    └── briefing.py      # Daily Granite briefing — reads top 10 scored_zones, calls ibm/granite-4-h-small,
+                         # writes DAILY_BRIEFING row to ai_explanations — DONE
 ```
 
 ---
@@ -75,9 +83,12 @@ Explains results to Karl in plain English
 Karl gets actionable answer
 ```
 
-**There are no Granite or LLM calls in the Python codebase.**
-Orchestrate's built-in model handles all AI reasoning and explanation.
-FastAPI's only job is SQL queries returning JSON.
+**Granite calls exist in the Python codebase** via `ibm-watsonx-ai` SDK:
+- `pipeline/briefing.py` — called once daily after scoring, result stored in `ai_explanations`
+- `dashboard/app.py` — called on-demand when user clicks Generate Briefing, result is ephemeral (session state only)
+
+Orchestrate's built-in model (GPT-OSS 120B) still handles Karl's chat reasoning separately.
+FastAPI's `/query` endpoint is SQL-only. `/briefing` endpoint reads from `ai_explanations`.
 
 ---
 
@@ -145,7 +156,7 @@ Caltrans AADT static CSV — optional, state routes only, one-time download.
 | `cases_311` | id, service_request_id, requested_datetime, service_name, service_subtype, address, latitude, longitude, supervisor_district, police_district, neighborhoods, ingested_at | Safety-relevant 311 cases from vw6y-z8j6 |
 | `ingest_metadata` | dataset_id, dataset_name, last_synced, record_count | Tracks last sync time per dataset for incremental pulls |
 | `scored_zones` | location_name, latitude, longitude, crash_count, fatality_count, complaint_count, recency_score, final_score, last_updated | Ranked priority output from RiskScoringModule — primary data source for /query |
-| `ai_explanations` | location_name, question_asked, explanation, generated_at | Currently unused — was for Granite caching, may be repurposed or removed |
+| `ai_explanations` | location_name, question_asked, explanation, generated_at | Stores daily Granite briefing — one row with location_name = 'DAILY_BRIEFING', replaced each run |
 
 **Important — `analysis_neighborhood` is null in both crash tables.**
 The source datasets (ubvf-ztfx, dau3-4s8f) do not include a neighborhood field.
@@ -163,7 +174,7 @@ location_name = clean uppercase street name e.g. "MISSION ST"
 
 Scoring formula:
 - recency_score = recent_count / total_count (recent = last 90 days)
-- raw = (crash_count * 0.4) + (fatality_count * 3.0) + (complaint_count * 0.1) + (recency_score * 20)
+- raw = (crash_count * 0.4) + (fatality_count * 3.5) + (complaint_count * 0.1) + (recency_score * 20)
 - final_score = (raw / max_raw_across_all_streets) * 100
 
 Filter out streets with fewer than 3 total records before scoring.
@@ -173,9 +184,9 @@ Use if_exists='replace' when writing to scored_zones — wipe and rewrite every 
 
 ## Confirmed Technical Rules
 
-**No Granite or LLM calls in Python.**
-All AI reasoning is handled by Orchestrate's built-in model.
-FastAPI contains SQL queries only — no prompt engineering, no LLM calls.
+**Granite calls in Python are scoped to briefing only.**
+`pipeline/briefing.py` and `dashboard/app.py` call `ibm/granite-4-h-small` via `ibm-watsonx-ai`.
+FastAPI `/query` endpoint remains SQL-only. No Granite calls in ingest or scoring logic.
 
 **Socrata API key is not required.**
 SF Open Data datasets are public. Pass None as the app token to sodapy.Socrata().
@@ -262,9 +273,8 @@ These were verified against the live dataset — all other subtypes in the origi
 - Real-time or streaming data (511.org excluded)
 - User authentication or accounts
 - H3 hexagonal spatial clustering — geographic grouping uses street name from source data
-- Streamlit — replaced by IBM watsonx Orchestrate as the user-facing interface
 - CrewAI, LiteLLM, langchain-ibm — all excluded
-- Granite/LLM calls in Python — replaced by Orchestrate's built-in model
+- Granite calls in ingest/scoring/query logic — briefing only
 - query.py / QueryModule — replaced by Orchestrate + FastAPI
 - Mobile UI
 - Dollar-amount budget optimization
@@ -279,13 +289,15 @@ These were verified against the live dataset — all other subtypes in the origi
 
 1. `pipeline/database.py` — SQLAlchemy models, DB connection, table creation — DONE
 2. `pipeline/ingest.py` — DataIngestionModule, Socrata fetch + normalize + write to DB — DONE
-3. `pipeline/score.py` — RiskScoringModule, street-level scoring + write scored_zones — IN PROGRESS (teammate)
+3. `pipeline/score.py` — RiskScoringModule, street-level scoring + write scored_zones — DONE
 4. `api/main.py` — FastAPIServer, SQL query endpoints + APScheduler — DONE
 5. Deploy to Render + UptimeRobot — DONE
 6. Orchestrate agent configuration — DONE
-7. End to end test with real scored data — PENDING score.py
-8. Demo preparation — Week 9-10
-9. Pitch deck and documentation — Week 9-10
+7. `pipeline/briefing.py` — daily Granite briefing after scoring, stored in ai_explanations — DONE
+8. `dashboard/app.py` — Streamlit dashboard with on-demand Granite briefing — DONE
+9. End to end test with real scored data — DONE (1957 streets scored, briefing generated)
+10. Demo preparation — Week 9-10
+11. Pitch deck and documentation — Week 9-10
 
 ---
 
@@ -296,7 +308,7 @@ These were verified against the live dataset — all other subtypes in the origi
 | crashes_fatality | 18 | Apr 2025 – Apr 2026 |
 | crashes_injury | 2,365 | Apr 2025 – Apr 2026 |
 | cases_311 | 46,986 | Apr 2025 – Apr 2026 |
-| scored_zones | 0 | Pending score.py |
+| scored_zones | 1,957 streets | Apr 2025 – Apr 2026 |
 
 Database: Render PostgreSQL at oregon-postgres.render.com/karls_db
 
@@ -345,3 +357,18 @@ Database: Render PostgreSQL at oregon-postgres.render.com/karls_db
 - **2026-04** — FastAPI servers field added to OpenAPI spec for Orchestrate import compatibility
 - **2026-04** — UptimeRobot confirmed working; HEAD method accepted by /health endpoint
 - **2026-04** — Render auto-deploy on GitHub push confirmed working
+- **2026-04** — score.py completed and run successfully; scored_zones populated with 1,957 streets
+- **2026-04** — score.py fatality weight confirmed as 3.5 (not 3.0 as originally planned)
+- **2026-04** — pipeline/briefing.py added: reads top 10 from scored_zones, calls ibm/granite-4-h-small, writes DAILY_BRIEFING row to ai_explanations; runs after scoring in daily_pipeline
+- **2026-04** — ibm-watsonx-ai package added to requirements.txt
+- **2026-04** — Granite model ID requires ibm/ prefix: correct ID is ibm/granite-4-h-small
+- **2026-04** — ai_explanations now actively used; DAILY_BRIEFING row replaced on each daily run
+- **2026-04** — /briefing GET endpoint added to FastAPIServer; returns stored explanation and generated_at
+- **2026-04** — daily_pipeline order confirmed: ingest → score → briefing; each step returns early on failure
+- **2026-04** — Streamlit dashboard added at dashboard/app.py; reads scored_zones via SQLAlchemy; run locally with run_dashboard.bat
+- **2026-04** — Dashboard map uses folium CircleMarkers on CartoDB dark_matter tiles; radius scaled by score; top-N cap slider in sidebar
+- **2026-04** — Dashboard has on-demand Granite briefing: calls ibm/granite-4-h-small directly from Streamlit using current slider weights; result stored in st.session_state only, never written to DB
+- **2026-04** — Dashboard briefing is independent from pipeline DAILY_BRIEFING: different formula (slider-normalized weights vs fixed pipeline weights), different trigger (on-demand vs daily), different storage (session state vs DB)
+- **2026-04** — Dashboard briefing prompt includes current normalized weight percentages so Granite explains results in terms of the user's weighting decision
+- **2026-04** — Stale warning shown in dashboard when sliders change after briefing was generated
+- **2026-04** — Orchestrate /briefing endpoint serves pipeline DAILY_BRIEFING only; dashboard briefing is never exposed via API

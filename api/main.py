@@ -5,7 +5,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from pipeline.database import ScoredZone, get_session
+from pipeline.database import AIExplanation, ScoredZone, get_session
 from pipeline.ingest import DataIngestionModule
 
 try:
@@ -18,6 +18,8 @@ try:
 except (ImportError, AttributeError):
     def _run_score():
         raise NotImplementedError("score() not yet implemented in pipeline/score.py")
+
+from pipeline.briefing import generate_daily_briefing as _generate_briefing
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +45,12 @@ def daily_pipeline():
         logger.info("Daily score complete.")
     except Exception as e:
         logger.error(f"Daily score failed: {e}")
+        return
+    try:
+        _generate_briefing()
+        logger.info("Daily briefing complete.")
+    except Exception as e:
+        logger.error(f"Daily briefing failed: {e}")
 
 
 app = FastAPI(
@@ -135,6 +143,18 @@ def query(
         ]
 
         return {"count": len(data), "data": data, "message": ""}
+    finally:
+        session.close()
+
+
+@app.get("/briefing")
+def briefing():
+    session = get_session()
+    try:
+        row = session.query(AIExplanation).filter_by(location_name="DAILY_BRIEFING").first()
+        if not row:
+            return {"status": "not_available", "briefing": None, "generated_at": None}
+        return {"status": "ok", "briefing": row.explanation, "generated_at": row.generated_at}
     finally:
         session.close()
 
