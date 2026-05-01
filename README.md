@@ -1,25 +1,30 @@
-### AI-Powered Road Safety Prioritization for SFMTA
+# AI-Powered Road Safety Prioritization for SFMTA
 
-Built by **Team Golden Rate** for the IBM SkillsBuild AI Experiential Learning Lab 2026.
+Built by **Team Golden Gate** for the IBM SkillsBuild AI Experiential Learning Lab 2026.
 
-This is a proof-of-concept decision-support tool that helps a non-technical SFMTA director identify which San Francisco streets should be prioritized for safety improvements. It ingests public crash and complaint data daily, scores locations by risk, and uses IBM Granite to answer plain-English questions about where to focus resources.
+A proof-of-concept decision-support tool that helps a non-technical SFMTA director identify which San Francisco streets should be prioritized for safety improvements. It ingests public crash and complaint data daily, scores streets by risk, generates an AI briefing using IBM Granite, and surfaces results through a conversational interface and a live dashboard.
 
 ---
 
-## How It Works
+## Architecture
 
 ```
-SF Open Data APIs (crashes + 311 complaints)
+SF Open Data (Socrata API)
         ↓
-Daily ingestion into PostgreSQL
+DataIngestionModule — fetches crash + 311 data daily into PostgreSQL
         ↓
-Risk scoring by street → scored_zones table
+RiskScoringModule — scores every street → scored_zones table
         ↓
-Karl asks a question in IBM watsonx Orchestrate
+Granite Briefing — IBM Granite summarizes top 10 streets → ai_explanations table
         ↓
-Two-stage Granite AI call (classify intent → fetch data → explain)
-        ↓
-Plain-English answer back to Karl
+  ┌─────────────────────────────────┐
+  │                                 │
+  ▼                                 ▼
+IBM watsonx Orchestrate         Streamlit Dashboard
+Karl asks plain-English          Map + table view of
+questions → Orchestrate calls    scored streets, on-demand
+FastAPI → SQL query → JSON       Granite briefing
+→ Orchestrate explains results
 ```
 
 ---
@@ -29,27 +34,28 @@ Plain-English answer back to Karl
 | Layer | Technology |
 |---|---|
 | Language | Python 3.11 |
-| Backend | FastAPI + Uvicorn |
-| Scheduler | APScheduler (daily ingestion) |
-| Database | PostgreSQL on Render free tier |
+| Backend API | FastAPI + Uvicorn |
+| Scheduler | APScheduler (daily at 6am UTC) |
+| Database | PostgreSQL on Render |
 | AI Model | IBM Granite (`ibm/granite-4-h-small`) via watsonx.ai |
-| User Interface | IBM watsonx Orchestrate |
+| Conversational UI | IBM watsonx Orchestrate |
+| Visual Dashboard | Streamlit |
 | Hosting | Render free tier |
-| Keep-alive | UptimeRobot (5-min pings) |
+| Keep-alive | UptimeRobot (5-min pings to /health) |
 
 ---
 
 ## Data Sources
 
-All data is public and fetched via the SF Open Data Socrata REST API.
+All data is public — no API key required.
 
-| Dataset | ID | Notes |
+| Dataset | Socrata ID | Notes |
 |---|---|---|
 | Traffic Crashes — Injury | `ubvf-ztfx` | Quarterly updates |
 | Traffic Crashes — Fatality | `dau3-4s8f` | Quarterly, 1-month lag |
 | SF 311 Cases | `vw6y-z8j6` | Nightly updates |
 
-Only safety-relevant 311 categories are ingested (blocked streets, pavement defects, streetlights, flooding, damaged traffic signals, etc).
+Only safety-relevant 311 categories are ingested (blocked streets, pavement defects, streetlights, flooding, damaged traffic signals, etc.).
 
 ---
 
@@ -57,56 +63,21 @@ Only safety-relevant 311 categories are ingested (blocked streets, pavement defe
 
 ```
 sfmta-safety-tool/
-├── .env                    # Never commit — credentials here
+├── .python-version       # Pins Python 3.11 for Render
 ├── requirements.txt
-├── run_normal.py           # Manual ingestion runner
+├── run_normal.py         # Local manual ingestion trigger (dev only)
 │
 ├── api/
-│   ├── main.py             # FastAPI server — /ingest, /score, /query
-│   └── openapi.yaml        # OpenAPI spec imported into Orchestrate
+│   └── main.py           # FastAPIServer — /query, /ingest, /score, /briefing, /health
+│
+├── dashboard/
+│   └── app.py            # Streamlit dashboard
 │
 └── pipeline/
-    ├── database.py         # SQLAlchemy models + DB connection
-    ├── ingest.py           # Fetches and stores raw data from Socrata
-    ├── score.py            # Scores streets by risk → scored_zones
-    └── query.py            # Two-stage Granite RAG call
-```
-
----
-
-## Setup
-
-### 1. Clone and install dependencies
-```bash
-git clone <repo-url>
-cd sfmta-safety-tool
-pip install -r requirements.txt
-```
-
-### 2. Configure environment variables
-Create a `.env` file in the project root:
-```
-DATABASE_URL=postgresql://user:password@host/dbname
-WATSONX_URL=https://us-south.ml.cloud.ibm.com
-WATSONX_PROJECT_ID=your_project_id
-WATSONX_API_KEY=your_api_key
-```
-
-For local development, omit `DATABASE_URL` to use a local SQLite file instead.
-
-### 3. Create database tables
-```bash
-python -m pipeline.database
-```
-
-### 4. Run ingestion
-```bash
-python run_normal.py
-```
-
-### 5. Start the API server
-```bash
-uvicorn api.main:app --reload
+    ├── database.py       # SQLAlchemy models + DB connection
+    ├── ingest.py         # DataIngestionModule — Socrata fetch + normalize + store
+    ├── score.py          # RiskScoringModule — street-level risk scoring
+    └── briefing.py       # Daily Granite briefing — reads top 10, writes to ai_explanations
 ```
 
 ---
@@ -115,23 +86,70 @@ uvicorn api.main:app --reload
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `/ingest` | POST | Fetch latest data from SF Open Data |
-| `/score` | POST | Re-score all streets and update scored_zones |
-| `/query` | POST | Answer a natural language question using Granite |
+| `/query` | GET | Query scored streets — all params optional |
+| `/ingest` | POST | Manually trigger data ingestion |
+| `/score` | POST | Manually trigger risk scoring |
+| `/briefing` | GET | Return the latest stored Granite briefing |
 | `/health` | GET | Health check for UptimeRobot keep-alive |
-| `/openapi.json` | GET | OpenAPI spec for Orchestrate tool import |
+
+### /query Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `street_name` | string | Partial street name filter (ILIKE) |
+| `metric` | string | Sort by: `final_score`, `crash_count`, `fatality_count`, `complaint_count`, `recency_score` |
+| `limit` | int | Results to return (default 10, max 50) |
+| `days_recent` | int | Filter to streets with activity in last N days |
+| `lat_min/lat_max/lng_min/lng_max` | float | Bounding box filter |
 
 ---
 
-## AI Query Flow
+## Risk Scoring Formula
 
-When Karl asks a question, the `/query` endpoint runs two Granite calls:
+Each street gets a `final_score` from 0–100:
 
-**Stage 1 — Intent Classification**
-Granite classifies Karl's question into a structured JSON object identifying what type of data to fetch (top priority streets, specific street, specific metric, or general question).
+```
+recency_score  = recent_crashes / total_crashes   (recent = last 90 days)
+raw_score      = (crash_count × 0.4) + (fatality_count × 3.5) + (complaint_count × 0.1) + (recency_score × 20)
+final_score    = (raw_score / max_raw_across_all_streets) × 100
+```
 
-**Stage 2 — Explanation**
-Granite receives the relevant scored street data and Karl's question, and returns a plain-English explanation Karl can use to justify budget decisions.
+Streets with fewer than 3 total records are excluded.
+
+---
+
+## Setup (Local)
+
+### 1. Install dependencies
+```bash
+pip install -r requirements.txt
+```
+
+### 2. Configure environment variables
+Create a `.env` file:
+```
+DATABASE_URL=postgresql://user:password@host/dbname
+WATSONX_URL=https://us-south.ml.cloud.ibm.com
+WATSONX_PROJECT_ID=your_project_id
+WATSONX_API_KEY=your_api_key
+```
+
+Omit `DATABASE_URL` to use a local SQLite file for development.
+
+### 3. Initialize the database
+```bash
+python -m pipeline.database
+```
+
+### 4. Start the API server
+```bash
+uvicorn api.main:app --reload
+```
+
+### 5. Start the dashboard
+```bash
+streamlit run dashboard/app.py
+```
 
 ---
 
@@ -142,20 +160,20 @@ Granite receives the relevant scored street data and Karl's question, and return
 | `crashes_injury` | 2,365 | Apr 2025 – Apr 2026 |
 | `crashes_fatality` | 18 | Apr 2025 – Apr 2026 |
 | `cases_311` | 46,986 | Apr 2025 – Apr 2026 |
+| `scored_zones` | 1,957 streets | Apr 2025 – Apr 2026 |
 
 ---
 
-## Important Notes
+## Notes
 
-- **No API key required** for SF Open Data — datasets are public
-- **Do not commit `.env`** — IBM Cloud credentials are deactivated immediately if exposed in a public repo
-- **Render free tier sleeps** after 15 minutes of inactivity — UptimeRobot keeps it alive during demos
-- **IAM tokens expire** after 60 minutes — token caching is implemented in `query.py`
+- **Do not commit `.env`** — IBM Cloud credentials are deactivated immediately if exposed
+- **Render free tier sleeps** after 15 minutes — UptimeRobot keeps it alive during demos
+- **Orchestrate tool import** — export `/openapi.json` from the running server and import into Orchestrate via Build → Agents → Toolset → Add tool → OpenAPI
 
 ---
 
 ## Built With IBM
 
-- IBM watsonx.ai — Granite foundation model
-- IBM watsonx Orchestrate — Conversational interface for Karl
+- IBM watsonx.ai — Granite foundation model (`ibm/granite-4-h-small`)
+- IBM watsonx Orchestrate — Conversational interface
 - IBM SkillsBuild AI Experiential Learning Lab 2026

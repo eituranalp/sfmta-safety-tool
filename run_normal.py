@@ -1,3 +1,11 @@
+# run_normal.py — Local manual ingestion trigger (development use only)
+#
+# On Render (production), APScheduler runs ingestion automatically at 6am UTC daily.
+# Use this script locally to manually pull the latest data from SF Open Data into
+# the database without triggering scoring or briefing.
+#
+# Usage: python run_normal.py
+
 import os
 from dotenv import load_dotenv
 from pipeline.database import init_db
