@@ -2,6 +2,10 @@
 
 Built by **Team Golden Gate** for the IBM SkillsBuild AI Experiential Learning Lab 2026.
 
+[![Live Dashboard](https://img.shields.io/badge/Live_Dashboard-Visit-blue)](https://sfmta-safety-tool-yvduhajzsv7dnrpoecwvvv.streamlit.app/)
+
+  [![Demo Video](https://img.shields.io/badge/Demo_Video-YouTube-red)](https://www.youtube.com/watch?v=ZoMH6Bb5gyE)
+
 A proof-of-concept decision-support tool that helps a non-technical SFMTA director identify which San Francisco streets should be prioritized for safety improvements. It ingests public crash and complaint data daily, scores streets by risk, generates an AI briefing using IBM Granite, and surfaces results through a conversational interface and a live dashboard.
 
 ---
