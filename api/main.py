@@ -5,7 +5,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from pipeline.database import AIExplanation, ScoredZone, get_session
+from pipeline.database import AIExplanation, ScoredZone, create_tables, get_session
 from pipeline.ingest import DataIngestionModule
 
 try:
@@ -69,6 +69,7 @@ app.add_middleware(
 
 @app.on_event("startup")
 def start_scheduler():
+    create_tables()
     scheduler.add_job(daily_pipeline, "cron", hour=6, minute=0)
     scheduler.start()
 
