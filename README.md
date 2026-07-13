@@ -2,7 +2,7 @@
 
 Built by **Team Golden Gate** for the IBM SkillsBuild AI Experiential Learning Lab 2026.
 
-[![Live Dashboard](https://img.shields.io/badge/Live_Dashboard-Visit-blue)](https://sfmta-safety-tool-yvduhajzsv7dnrpoecwvvv.streamlit.app/)
+[Live Dashboard]() Currently down
 
   [![Demo Video](https://img.shields.io/badge/Demo_Video-YouTube-red)](https://www.youtube.com/watch?v=ZoMH6Bb5gyE)
 
